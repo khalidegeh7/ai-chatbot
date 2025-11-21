@@ -1,55 +1,14 @@
+import { useState } from "react";
 import ChatHeader from "./components/ChatHeader";
 import ChatArea from "./components/ChatArea";
 import ChatInput from "./components/ChatInput";
-import { useState, useEffect } from "react";
-import { supabase } from "./supabaseClient"; // make sure VITE keys are set
+import { supabase } from "./supabaseClient";
 
 function App() {
   const [messages, setMessages] = useState([]);
+
+  // Generate a unique id
   const uuid = () => crypto.randomUUID();
-
-  // Load messages from Supabase on mount
-  useEffect(() => {
-    async function loadMessages() {
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .order("created_at", { ascending: true });
-
-      if (error) {
-        console.error("Supabase fetch error:", error);
-        return;
-      }
-
-      const loadedMessages = data.map((m) => ({
-        id: m.id,
-        sender: m.sender,
-        text: m.text,
-        time: new Date(m.created_at).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-      }));
-
-      setMessages(loadedMessages);
-    }
-
-    loadMessages();
-  }, []);
-
-  // Save a message to Supabase
-  async function saveMessageToDB(message) {
-    const { data, error } = await supabase.from("messages").insert([
-      {
-        id: message.id,
-        sender: message.sender,
-        text: message.text,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-
-    if (error) console.error("Supabase insert error:", error);
-  }
 
   // Handle sending messages
   async function handleSend(text) {
@@ -74,20 +33,29 @@ function App() {
       time: currentTime,
     };
 
-    // Add user and placeholder bot message
+    // Show messages immediately
     setMessages((prev) => [...prev, newUserMessage, tempBot]);
 
-    // Save user message
-    saveMessageToDB(newUserMessage);
+    // Save user message to Supabase
+    const { error: insertErrorUser } = await supabase.from("messages").insert([
+      {
+        id: newUserMessage.id,
+        sender: newUserMessage.sender,
+        text: newUserMessage.text,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    if (insertErrorUser) console.error("Supabase insert error (user):", insertErrorUser);
 
     try {
+      // Call your Edge Function
       const response = await fetch(
         "https://arkhusjvmkzhilelhdmu.supabase.co/functions/v1/chatbot",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            messages: [newUserMessage, ...messages].map((m) => ({
+            messages: [newUserMessage].map((m) => ({
               role: m.sender === "user" ? "user" : "model",
               content: m.text,
             })),
@@ -98,18 +66,28 @@ function App() {
       const data = await response.json();
       const botReply = data.reply || "No reply";
 
-      // Replace placeholder with real bot reply
+      // Update placeholder bot message
       setMessages((prev) =>
         prev.map((m) => (m.id === tempBot.id ? { ...m, text: botReply } : m))
       );
 
-      // Save bot reply
-      saveMessageToDB({ ...tempBot, text: botReply });
+      // Save bot reply to Supabase
+      const { error: insertErrorBot } = await supabase.from("messages").insert([
+        {
+          id: tempBot.id,
+          sender: tempBot.sender,
+          text: botReply,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      if (insertErrorBot) console.error("Supabase insert error (bot):", insertErrorBot);
     } catch (err) {
       console.error("Failed to call Edge Function:", err);
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === tempBot.id ? { ...m, text: "⚠ Failed to reach server" } : m
+          m.id === tempBot.id
+            ? { ...m, text: "⚠ Failed to reach server" }
+            : m
         )
       );
     }
@@ -125,6 +103,3 @@ function App() {
 }
 
 export default App;
-
-
-
